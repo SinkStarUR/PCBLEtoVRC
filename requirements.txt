@@ -1,0 +1,15 @@
+# PCBLEtoVRC Dependencies
+# Install with: pip install -r requirements.txt
+
+# BLE Communication
+bleak
+
+# OSC Protocol
+python-osc
+
+# GUI Framework
+PyQt5
+
+# Pulsoid WebSocket Support
+websocket-client
+requests

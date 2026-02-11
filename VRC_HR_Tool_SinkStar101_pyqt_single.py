@@ -12,6 +12,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QPalette, QColor
 
+# Pulsoid 数据源支持
+from pulsoid_worker import PulsoidWorker
+
 class HeartRateWorker(QThread):
     """工作线程，用于运行异步的心率监测代码"""
     
@@ -279,30 +282,60 @@ class HeartRateMonitorGUI(QMainWindow):
         
         layout.addWidget(osc_group)
         
-        # 设备配置组
-        device_group = QGroupBox("设备配置")
-        device_layout = QFormLayout(device_group)
+        # 通用配置组（适用于所有数据源）
+        general_group = QGroupBox("通用配置（适用于所有数据源）")
+        general_layout = QFormLayout(general_group)
         
-        self.device_name_edit = QLineEdit(self.config.get('DATABASE', 'device_name'))
-        device_layout.addRow("设备名称:", self.device_name_edit)
+        self.data_source_combo = QComboBox()
+        self.data_source_combo.addItem("蓝牙 BLE", "ble")
+        self.data_source_combo.addItem("Pulsoid", "pulsoid")
+        current_source = self.config.get('DATABASE', 'data_source', fallback='ble')
+        self.data_source_combo.setCurrentIndex(0 if current_source == 'ble' else 1)
+        self.data_source_combo.currentIndexChanged.connect(self.on_data_source_changed)
+        general_layout.addRow("数据源:", self.data_source_combo)
         
         self.hr_min_spin = QSpinBox()
         self.hr_min_spin.setRange(0, 200)
         self.hr_min_spin.setValue(self.config.getint('DATABASE', 'hr_min'))
-        device_layout.addRow("最低心率:", self.hr_min_spin)
+        general_layout.addRow("最低心率:", self.hr_min_spin)
         
         self.hr_max_spin = QSpinBox()
-        self.hr_max_spin.setRange(0, 200)
+        self.hr_max_spin.setRange(0, 300)
         self.hr_max_spin.setValue(self.config.getint('DATABASE', 'hr_max'))
-        device_layout.addRow("最高心率:", self.hr_max_spin)
+        general_layout.addRow("最高心率:", self.hr_max_spin)
         
         self.obs_mode_combo = QComboBox()
         self.obs_mode_combo.addItem("普通模式", 0)
         self.obs_mode_combo.addItem("OBS模式", 1)
         self.obs_mode_combo.setCurrentIndex(self.config.getint('DATABASE', 'obs_mode'))
-        device_layout.addRow("工作模式:", self.obs_mode_combo)
+        general_layout.addRow("工作模式:", self.obs_mode_combo)
         
-        layout.addWidget(device_group)
+        layout.addWidget(general_group)
+        
+        # 蓝牙 BLE 配置组
+        ble_group = QGroupBox("蓝牙 BLE 配置")
+        ble_layout = QFormLayout(ble_group)
+        
+        self.device_name_edit = QLineEdit(self.config.get('DATABASE', 'device_name'))
+        self.device_name_edit.setPlaceholderText("输入蓝牙设备名称（支持模糊匹配）")
+        ble_layout.addRow("设备名称:", self.device_name_edit)
+        
+        layout.addWidget(ble_group)
+        self.ble_group = ble_group  # 保存引用用于切换显示
+        
+        # Pulsoid 配置组
+        pulsoid_group = QGroupBox("Pulsoid 配置")
+        pulsoid_layout = QFormLayout(pulsoid_group)
+        
+        self.widget_id_edit = QLineEdit(self.config.get('DATABASE', 'pulsoid_widget_id', fallback=''))
+        self.widget_id_edit.setPlaceholderText("输入 Pulsoid Widget ID")
+        pulsoid_layout.addRow("Widget ID:", self.widget_id_edit)
+        
+        layout.addWidget(pulsoid_group)
+        self.pulsoid_group = pulsoid_group  # 保存引用用于切换显示
+        
+        # 根据当前数据源切换显示
+        self.on_data_source_changed(self.data_source_combo.currentIndex())
         
         # 保存配置按钮
         self.save_config_button = QPushButton("保存配置")
@@ -329,6 +362,13 @@ class HeartRateMonitorGUI(QMainWindow):
         
         layout.addLayout(button_layout)
     
+    def on_data_source_changed(self, index):
+        """数据源切换时更新 UI 状态"""
+        is_pulsoid = self.data_source_combo.currentData() == 'pulsoid'
+        # 切换配置组的可见性
+        self.ble_group.setVisible(not is_pulsoid)
+        self.pulsoid_group.setVisible(is_pulsoid)
+    
     def start_monitoring(self):
         """开始心率监测"""
         # 保存当前配置
@@ -337,8 +377,15 @@ class HeartRateMonitorGUI(QMainWindow):
         # 重新读取配置
         self.config.read('config.ini')
         
-        # 创建工作线程
-        self.worker = HeartRateWorker(self.config)
+        # 根据数据源选择创建对应的 Worker
+        data_source = self.config.get('DATABASE', 'data_source', fallback='ble')
+        
+        if data_source == 'pulsoid':
+            self.worker = PulsoidWorker(self.config)
+            self.log_text.append("使用 Pulsoid 数据源开始心率监测...")
+        else:
+            self.worker = HeartRateWorker(self.config)
+            self.log_text.append("使用蓝牙 BLE 数据源开始心率监测...")
         
         # 连接信号
         self.worker.status_update.connect(self.update_status)
@@ -352,8 +399,6 @@ class HeartRateMonitorGUI(QMainWindow):
         # 更新按钮状态
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        
-        self.log_text.append("开始心率监测...")
     
     def stop_monitoring(self):
         """停止心率监测"""
@@ -413,6 +458,8 @@ class HeartRateMonitorGUI(QMainWindow):
         self.config.set('DATABASE', 'hr_min', str(self.hr_min_spin.value()))
         self.config.set('DATABASE', 'hr_max', str(self.hr_max_spin.value()))
         self.config.set('DATABASE', 'obs_mode', str(self.obs_mode_combo.currentData()))
+        self.config.set('DATABASE', 'data_source', self.data_source_combo.currentData())
+        self.config.set('DATABASE', 'pulsoid_widget_id', self.widget_id_edit.text())
         
         with open('config.ini', 'w') as configfile:
             self.config.write(configfile)
